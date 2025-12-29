@@ -1,5 +1,6 @@
 #include <kamek.hpp>
 
+#if 0
 
 #ifndef _WIIMMFI
 #define _WIIMMFI_
@@ -198,5 +199,7 @@ kmWrite32(0x800ecaac, 0x3bc00000);
 
 //Nop host header
 kmWrite32(0x800ed868, 0x60000000);
+
+#endif
 
 #endif

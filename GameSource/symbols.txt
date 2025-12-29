@@ -5,6 +5,7 @@ wcstombs = 0x8000f138
 memmove = 0x8000f1f0
 memcmp = 0x8000f314
 snprintf = 0x80011938
+sprintf = 0x80011a2c
 qsort = 0x80011b00
 rand = 0x80011c70
 srand = 0x80011c90
@@ -128,6 +129,7 @@ Patch_AuthserverHosts = 0x8027a474
 SSL_Initialised = 0x80386d4c
 
 #DWC
+
 Printf__3DWCFUiPCce = 0x800cd068
 InitGHTTP__3DWCFPCc = 0x800cd3b0
 ShutdownGHTTP__3DWCFv = 0x800cd3f4
@@ -140,11 +142,14 @@ CloseConnectionHard__3DWCFUc = 0x800d2000
 SendMatchCommand__3DWCFQ23DWC12MatchCommandUiUiUsPvUi = 0x800dbd38
 SetRecvBuffer__3DWCFUcPvi = 0x800e8750
 Patch_AuthServerOverride = 0x800ecaac
+Real_DWCi_Auth_SendRequest = 0x800ed6ec
 Patch_HostHeader = 0x800ed868
 Patch_WiimmfiHook1 = 0x800ee3a0
+s_auth_error = 0x802f1cB8
 loginRegion__3DWC = 0x80384fd0
 DWC_AuthServer = 0x80386338
-authServer__3DWC = 0x80386338 
+authServer__3DWC = 0x80386338
+s_auth_work = 0x8038633c
 
 #GHTTP
 PostAddFileFromMemoryA__5GHTTPFPPQ25GHTTP7GHIPostPCcPCviPCcPCc = 0x80113944
@@ -442,6 +447,9 @@ SHA1GetDigest__3NETFPQ23NET11SHA1ContextPv = 0x801d25f8
 Patch_WiimmfiHook2 = 0x801d4efc
 
 #NHTTP
+DestroyResponse__5NHTTPFPv = 0x801d92f8
+SendRequestAsync__5NHTTPFPv = 0x801d925c
+CreateRequest__5NHTTPFPCciPvUiPvPv = 0x801d8ff8
 GetBodyAll__5NHTTPFPQ25NHTTP3ResPPc = 0x801d937c
 
 #SSL
