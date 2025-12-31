@@ -1,15 +1,18 @@
+#include <MarioKartWii/RKNet/RKNetController.hpp>
 #include <Network/RSA.hpp>
 #include <Network/SHA256.hpp>
-#include <Network/WiiLink.hpp>
 #include <core/rvl/DWC/DWC.hpp>
 #include <core/rvl/NHTTP/NHTTP.hpp>
 #include <core/rvl/ipc/ipc.hpp>
 #include <kamek.hpp>
 
-#ifndef _WIILINK_
-#define _WIILINK_
+#define WWFC_PRODUCTION 1
 
-static u8 s_payloadBlock[ PAYLOAD_BLOCK_SIZE + 0x20 ];
+#include <Network/WiiLink/wwfcError.h>
+#include <Network/WiiLink/wwfcPublicKey.h>
+#include <Network/WiiLink/wwfcTypes.h>
+
+static u8 s_payloadBlock[ WWFC_PAYLOAD_BLOCK_SIZE + 0x20 ];
 static void *s_payload = nullptr;
 static bool s_payloadReady = false;
 static u8 s_saltHash[ SHA256_DIGEST_SIZE ];
@@ -34,7 +37,7 @@ static asm void DWCi_Auth_SendRequest( int param_1, int param_2, int param_3, in
     // clang-format on
 }
 
-bool GenerateRandomSalt( u8 *out )
+bool GenerateRandomSalt( u8 *out, u32 *deviceId )
 {
     // Generate cryptographic random with ES_Sign
     s32 fd = IOS::Open( "/dev/es", IOS::MODE_NONE );
@@ -43,12 +46,12 @@ bool GenerateRandomSalt( u8 *out )
         return false;
     }
 
-    u8 dummy[ 0x20 ] __attribute( ( aligned( 0x40 ) ) );
+    __declspec( align( 0x40 ) ) u8 dummy[ 0x20 ];
     dummy[ 0 ] = 0x7a;
-    u8 eccCert[ 0x180 ] __attribute( ( aligned( 0x40 ) ) );
-    u8 eccSignature[ 0x3C ] __attribute( ( aligned( 0x40 ) ) );
+    __declspec( align( 0x40 ) ) u8 eccCert[ 0x180 ];
+    __declspec( align( 0x40 ) ) u8 eccSignature[ 0x3C ];
 
-    IOS::IOCtlvRequest vec[ 3 ] __attribute( ( aligned( 0x40 ) ) );
+    __declspec( align( 0x20 ) ) IOS::IOCtlvRequest vec[ 3 ];
     vec[ 0 ].address = &dummy;
     vec[ 0 ].size = 1;
     vec[ 1 ].address = eccSignature;
@@ -70,6 +73,9 @@ bool GenerateRandomSalt( u8 *out )
     SHA256Update( &ctx, eccSignature, 0x3C );
     SHA256Update( &ctx, eccCert, 0x180 );
     memcpy( out, SHA256Final( &ctx ), SHA256_DIGEST_SIZE );
+
+    *deviceId = strtoul( reinterpret_cast< char * >( eccCert ) + 0xC4 + 2, nullptr, 16 );
+
     return true;
 }
 
@@ -83,7 +89,7 @@ s32 HandleResponse( u8 *block )
     }
 
     if( payload->header.total_size < sizeof( wwfc_payload ) ||
-            payload->header.total_size > PAYLOAD_BLOCK_SIZE )
+            payload->header.total_size > WWFC_PAYLOAD_BLOCK_SIZE )
     {
         return WL_ERROR_PAYLOAD_STAGE1_LENGTH_ERROR;
     }
@@ -99,7 +105,7 @@ s32 HandleResponse( u8 *block )
             payload->header.total_size - sizeof( wwfc_payload_header ) );
     u8 *hash = SHA256Final( &ctx );
 
-    if( !RSAVerify( reinterpret_cast< const RSAPublicKey * >( PayloadPublicKey ),
+    if( !RSAVerify( reinterpret_cast< const RSAPublicKey * >( wwfc_payload_public_key ),
                 payload->header.signature, hash ) )
     {
         return WL_ERROR_PAYLOAD_STAGE1_SIGNATURE_INVALID;
@@ -110,6 +116,7 @@ s32 HandleResponse( u8 *block )
     {
         asm( dcbf i, payload; sync; icbi i, payload; isync; );
     }
+    asm( sc );
 
 #if 0
     // Disable unnecessary patches
@@ -129,10 +136,18 @@ s32 HandleResponse( u8 *block )
     }
 #endif
 
-    s32 ( *entryFunction )( wwfc_payload * ) = reinterpret_cast< s32 ( * )( wwfc_payload * ) >(
+    wwfc_payload_entry_t entry = reinterpret_cast< wwfc_payload_entry_t >(
             reinterpret_cast< u8 * >( payload ) + payload->info.entry_point );
 
-    return entryFunction( payload );
+    s32 result = entry( payload );
+
+    wwfc_function_exec_t functionExec =
+            reinterpret_cast< wwfc_function_exec_t >( payload->info.function_exec );
+
+    functionExec( WWFC_FUNCTION_SET_VALUE, WWFC_KEY_ENABLE_AGGRESSIVE_PACKET_CHECKS,
+            WWFC_BOOLEAN_FALSE );
+
+    return result;
 }
 
 void OnPayloadReceived( s32 result, void *response, void *userdata )
@@ -160,8 +175,8 @@ void OnPayloadReceived( s32 result, void *response, void *userdata )
     s_auth_error = -1; // This error code will retry auth
 }
 
-kmBranchDefCpp( 0x800ed6e8, 0, void, int param_1, int param_2, int param_3, int param_4,
-        int param_5, int param_6 )
+void DWCi_Auth_SendRequest_Patched( int param_1, int param_2, int param_3, int param_4, int param_5,
+        int param_6 )
 {
     if( s_payloadReady )
     {
@@ -170,10 +185,11 @@ kmBranchDefCpp( 0x800ed6e8, 0, void, int param_1, int param_2, int param_3, int 
     }
 
     s_payload = (void *)( ( u32( s_payloadBlock ) + 31 ) & ~31 );
-    memset( s_payload, 0, PAYLOAD_BLOCK_SIZE );
+    memset( s_payload, 0, WWFC_PAYLOAD_BLOCK_SIZE );
 
     u8 salt[ SHA256_DIGEST_SIZE ];
-    if( !GenerateRandomSalt( salt ) )
+    u32 deviceId;
+    if( !GenerateRandomSalt( salt, &deviceId ) )
     {
         s_auth_error = WL_ERROR_PAYLOAD_STAGE1_MAKE_REQUEST;
     }
@@ -188,7 +204,8 @@ kmBranchDefCpp( 0x800ed6e8, 0, void, int param_1, int param_2, int param_3, int 
     saltHex[ SHA256_DIGEST_SIZE * 2 ] = 0;
 
     char uri[ 0x100 ];
-    sprintf( uri, "payload?g=RMC%cD00&s=%s", *(char *)0x80000003, saltHex );
+    sprintf( uri, "payload?c=pulsar2&d=%08x&g=RMC%cD00&s=%s", deviceId, *(char *)0x80003183,
+            saltHex );
 
     // Generate salt hash
     SHA256Context ctx;
@@ -200,8 +217,8 @@ kmBranchDefCpp( 0x800ed6e8, 0, void, int param_1, int param_2, int param_3, int 
     sprintf( url, "http://nas.%s/%s&h=%02x%02x%02x%02x", WWFC_DOMAIN, uri, s_saltHash[ 0 ],
             s_saltHash[ 1 ], s_saltHash[ 2 ], s_saltHash[ 3 ] );
 
-    void *request =
-            NHTTP::CreateRequest( url, 0, s_payload, PAYLOAD_BLOCK_SIZE, OnPayloadReceived, 0 );
+    void *request = NHTTP::CreateRequest( url, 0, s_payload, WWFC_PAYLOAD_BLOCK_SIZE,
+            reinterpret_cast< void * >( OnPayloadReceived ), 0 );
 
     if( request == nullptr )
     {
@@ -212,4 +229,35 @@ kmBranchDefCpp( 0x800ed6e8, 0, void, int param_1, int param_2, int param_3, int 
     s_auth_work[ 0x59E0 / 4 ] = NHTTP::SendRequestAsync( request );
 }
 
-#endif
+kmBranch( 0x800ED6E8, DWCi_Auth_SendRequest_Patched );
+
+void SetEnableAggressivePacketChecks( )
+{
+    RKNet::Controller &controller = *RKNet::Controller::sInstance;
+    controller.connectionState = RKNet::CONNECTIONSTATE_ROOM;
+
+    if( !s_payloadReady )
+    {
+        return;
+    }
+
+    wwfc_boolean_t enable = WWFC_BOOLEAN_FALSE;
+    switch( controller.roomType )
+    {
+    case RKNet::ROOMTYPE_VS_WW:
+    case RKNet::ROOMTYPE_BT_WW:
+    case RKNet::ROOMTYPE_JOINING_WW:
+    case RKNet::ROOMTYPE_JOINING_BT_WW:
+        enable = WWFC_BOOLEAN_RESET;
+    }
+
+    wwfc_function_exec_t functionExec =
+            reinterpret_cast< wwfc_payload_ex * >( s_payload )->info.function_exec;
+
+    functionExec( WWFC_FUNCTION_SET_VALUE, WWFC_KEY_ENABLE_AGGRESSIVE_PACKET_CHECKS, enable );
+}
+
+kmCall( 0x806577F4, SetEnableAggressivePacketChecks );
+
+// Enable DWC logging
+kmWrite32( 0x803862C0, 0xFFFFFFFF );
